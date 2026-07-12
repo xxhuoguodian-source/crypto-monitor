@@ -1,17 +1,39 @@
-name: Test GitHub Actions
+name: Crypto News Monitor
 
 on:
+  schedule:
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
+permissions:
+  contents: write
 
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: Print Hello
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖包
+        run: pip install feedparser anthropic requests
+
+      - name: 运行监控脚本
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 crypto_news_monitor.py
+
+      - name: 保存去重记录
         run: |
-          echo "Hello, GitHub Actions!"
-          python --version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_articles.json
+          git diff --quiet --cached || git commit -m "更新已推送文章记录"
+          git push
