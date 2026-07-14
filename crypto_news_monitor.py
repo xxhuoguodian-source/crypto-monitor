@@ -5,15 +5,18 @@
 功能：定时抓取 RSS 信息源 -> 用 Claude API 判断相关性并摘要 -> 相关的推送到 Telegram
 
 使用前准备：
-1. pip install feedparser anthropic requests --break-system-packages
+1. pip install feedparser requests --break-system-packages
 2. 申请 Telegram Bot：
    - 在 Telegram 里找 @BotFather，发送 /newbot，按提示创建，拿到 BOT_TOKEN
    - 和你的新 bot 随便发一条消息，然后访问：
      https://api.telegram.org/bot<你的TOKEN>/getUpdates
      在返回的 JSON 里找 "chat":{"id": xxxx} ，这个数字就是 CHAT_ID
-3. 准备好 Anthropic API Key（在 console.anthropic.com 申请）
+3. 准备好 Gemini API Key（在 aistudio.google.com 免费申请，有免费额度）
 4. 把下面的 RSS_FEEDS、KEYWORDS_HINT、环境变量填好
 5. 本地测试跑通后，用 cron 或者云端定时任务（见文末说明）定时运行
+
+本版本使用 Google Gemini API（有免费额度）替代 Anthropic API，
+不需要额外安装 anthropic 库，直接用 requests 调用 Gemini 的 REST 接口即可。
 
 设计要点：
 - 用本地 JSON 文件记录已推送过的链接，避免重复通知（"存储去重"那一层）
@@ -29,7 +32,6 @@ from pathlib import Path
 
 import feedparser
 import requests
-import anthropic
 
 # ============ 配置区：按需修改 ============
 
@@ -52,16 +54,20 @@ TOPIC_HINT = """
 """
 
 # 3. 环境变量（不要把密钥直接写进代码，用环境变量传入更安全）
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# Gemini 免费模型的接口地址（gemini-1.5-flash 免费额度较高，速度也快）
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-1.5-flash:generateContent"
+)
 
 # 4. 去重记录文件（记录已经处理过的文章链接）
 SEEN_FILE = Path(__file__).parent / "seen_articles.json"
 
 # ============ 核心逻辑 ============
-
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 def load_seen() -> set:
@@ -104,7 +110,7 @@ def fetch_new_articles(seen: set) -> list:
 
 def judge_relevance_and_summarize(article: dict) -> dict | None:
     """
-    调用 Claude API 判断这篇文章是否相关，如果相关就顺便生成摘要。
+    调用 Gemini API 判断这篇文章是否相关，如果相关就顺便生成摘要。
     返回 None 表示不相关，跳过。
     """
     prompt = f"""{TOPIC_HINT}
@@ -119,12 +125,14 @@ def judge_relevance_and_summarize(article: dict) -> dict | None:
 如果不相关，key_points 留空数组即可。
 """
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
+        resp = requests.post(
+            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=30,
         )
-        text = resp.content[0].text.strip()
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         # 兼容模型偶尔加代码块标记的情况
         text = text.replace("```json", "").replace("```", "").strip()
         result = json.loads(text)
@@ -180,9 +188,9 @@ def run_once():
 
 
 if __name__ == "__main__":
-    if not all([ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    if not all([GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
         raise SystemExit(
-            "请先设置环境变量 ANTHROPIC_API_KEY / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID"
+            "请先设置环境变量 GEMINI_API_KEY / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID"
         )
     run_once()
 
