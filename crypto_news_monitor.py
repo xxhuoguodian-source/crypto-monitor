@@ -93,7 +93,7 @@ def fetch_new_articles(seen: set) -> list:
     for source_name, feed_url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:10]:  # 每个源只看最新 10 条，避免历史存量刷屏
+            for entry in feed.entries[:5]:  # 每个源只看最新 5 条，控制总请求量，避免触发免费额度限速
                 aid = article_id(entry)
                 if aid not in seen:
                     new_articles.append({
@@ -108,10 +108,11 @@ def fetch_new_articles(seen: set) -> list:
     return new_articles
 
 
-def judge_relevance_and_summarize(article: dict) -> dict | None:
+def judge_relevance_and_summarize(article: dict, max_retries: int = 3) -> dict | None:
     """
     调用 Gemini API 判断这篇文章是否相关，如果相关就顺便生成摘要。
     返回 None 表示不相关，跳过。
+    遇到 429（请求太频繁）会自动等待后重试。
     """
     prompt = f"""{TOPIC_HINT}
 
@@ -124,22 +125,29 @@ def judge_relevance_and_summarize(article: dict) -> dict | None:
 {{"relevant": true/false, "reason": "一句话说明为什么相关或不相关", "key_points": ["要点1", "要点2"]}}
 如果不相关，key_points 留空数组即可。
 """
-    try:
-        resp = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        # 兼容模型偶尔加代码块标记的情况
-        text = text.replace("```json", "").replace("```", "").strip()
-        result = json.loads(text)
-        return result if result.get("relevant") else None
-    except Exception as e:
-        print(f"[警告] LLM 判断失败: {e}")
-        return None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                wait = 15 * (attempt + 1)  # 15秒、30秒、45秒递增等待
+                print(f"[限速] 请求太频繁，等待 {wait} 秒后重试...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            text = text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(text)
+            return result if result.get("relevant") else None
+        except Exception as e:
+            print(f"[警告] LLM 判断失败: {e}")
+            return None
+    print(f"[警告] 多次重试后仍被限速，跳过: {article['title']}")
+    return None
 
 
 def send_telegram(text: str):
@@ -181,7 +189,7 @@ def run_once():
             print(f"[跳过] {article['title']}")
 
         seen.add(article["id"])
-        time.sleep(1)  # 简单限速，避免过快触发 API 速率限制
+        time.sleep(7)  # 免费版 Gemini 限速约每分钟 10 次，间隔拉长避免触发 429
 
     save_seen(seen)
     print("本轮处理完成。")
