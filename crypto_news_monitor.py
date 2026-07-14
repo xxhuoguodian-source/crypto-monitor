@@ -58,10 +58,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Gemini 免费模型的接口地址（gemini-1.5-flash 免费额度较高，速度也快）
+# Gemini 免费模型的接口地址（gemini-2.5-flash 是当前可用的免费额度模型）
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
+    "gemini-2.5-flash:generateContent"
 )
 
 # 4. 去重记录文件（记录已经处理过的文章链接）
